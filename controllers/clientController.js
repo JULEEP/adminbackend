@@ -2,6 +2,7 @@ import Client from "../models/Client.js";
 import crypto from 'crypto';
 
 import jwt from 'jsonwebtoken';
+import Product from "../models/Product.js";
 
 // Generate JWT
 const generateToken = (client) => {
@@ -177,3 +178,156 @@ export const clientLogin = async (req, res) => {
     res.status(500).json({ message: 'Server error', error: error.message });
   }
 };
+
+
+
+
+// Get all products
+export const getAllProducts = async (req, res) => {
+  try {
+    const products = await Product.find().sort({ createdAt: -1 });
+    
+    res.status(200).json({
+      success: true,
+      count: products.length,
+      products
+    });
+  } catch (error) {
+    console.error('Error fetching products:', error);
+    res.status(500).json({ 
+      success: false, 
+      message: 'Error fetching products', 
+      error: error.message 
+    });
+  }
+};
+
+
+
+// Create product
+export const createProduct = async (req, res) => {
+  try {
+    const { name, code, description, price, category, status, features, addedBy } = req.body;
+
+    // Check if product with same code exists
+    const existingProduct = await Product.findOne({ code });
+    if (existingProduct) {
+      return res.status(400).json({ 
+        success: false, 
+        message: 'Product with this code already exists' 
+      });
+    }
+
+    const product = new Product({
+      name,
+      code: code.toUpperCase(),
+      description,
+      price,
+      category,
+      status,
+      features,
+      addedBy: addedBy || 'Admin'
+    });
+
+    await product.save();
+
+    res.status(201).json({
+      success: true,
+      message: 'Product created successfully',
+      product
+    });
+  } catch (error) {
+    console.error('Error creating product:', error);
+    res.status(500).json({ 
+      success: false, 
+      message: error.message 
+    });
+  }
+};
+
+
+
+// Update product
+export const updateProduct = async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { name, code, description, price, category, status, features, addedBy } = req.body;
+
+    // Check if product exists
+    const product = await Product.findById(id);
+    if (!product) {
+      return res.status(404).json({ 
+        success: false, 
+        message: 'Product not found' 
+      });
+    }
+
+    // Check if code is being changed and if it already exists
+    if (code && code !== product.code) {
+      const existingProduct = await Product.findOne({ code });
+      if (existingProduct) {
+        return res.status(400).json({ 
+          success: false, 
+          message: 'Product with this code already exists' 
+        });
+      }
+    }
+
+    // Update product
+    const updatedProduct = await Product.findByIdAndUpdate(
+      id,
+      {
+        name: name || product.name,
+        code: code ? code.toUpperCase() : product.code,
+        description: description !== undefined ? description : product.description,
+        price: price !== undefined ? price : product.price,
+        category: category || product.category,
+        status: status || product.status,
+        features: features !== undefined ? features : product.features,
+        addedBy: addedBy || product.addedBy
+      },
+      { new: true }
+    );
+
+    res.status(200).json({
+      success: true,
+      message: 'Product updated successfully',
+      product: updatedProduct
+    });
+  } catch (error) {
+    console.error('Error updating product:', error);
+    res.status(500).json({ 
+      success: false, 
+      message: error.message 
+    });
+  }
+};
+
+// Delete product
+export const deleteProduct = async (req, res) => {
+  try {
+    const { id } = req.params;
+
+    const product = await Product.findByIdAndDelete(id);
+
+    if (!product) {
+      return res.status(404).json({ 
+        success: false, 
+        message: 'Product not found' 
+      });
+    }
+
+    res.status(200).json({
+      success: true,
+      message: 'Product deleted successfully'
+    });
+  } catch (error) {
+    console.error('Error deleting product:', error);
+    res.status(500).json({ 
+      success: false, 
+      message: error.message 
+    });
+  }
+};
+
+

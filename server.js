@@ -7,6 +7,8 @@ import dns from 'dns'; // Add this
 import connectDB from './config/db.js';
 import userRoutes from './routes/userRoutes.js';
 import clientRoutes from './routes/clientRoutes.js';
+import couponRoutes from './routes/couponRoutes.js';
+
 
 // 🔥 DNS FIX - Sabse pehle yeh line
 dns.setServers(['8.8.8.8', '8.8.4.4', '1.1.1.1']);
@@ -33,6 +35,8 @@ app.use('/uploads', express.static(path.join(__dirname, 'uploads')));
 // Routes
 app.use('/api/users', userRoutes);
 app.use('/api/clients', clientRoutes);
+app.use('/api/coupons', couponRoutes);
+
 
 // Root route
 app.get('/', (req, res) => {
