@@ -3,6 +3,8 @@ import crypto from 'crypto';
 
 import jwt from 'jsonwebtoken';
 import Product from "../models/Product.js";
+import Razorpay from 'razorpay';
+
 
 // Generate JWT
 const generateToken = (client) => {
@@ -16,17 +18,50 @@ const generateToken = (client) => {
 
 
 
-// Add client
+// Initialize Razorpay
+const razorpay = new Razorpay({
+  key_id: 'rzp_test_BxtRNvflG06PTV',
+  key_secret: 'RecEtdcenmR7Lm4AIEwo4KFr',
+});
+
+// Add client with document upload and payment
 export const addClient = async (req, res) => {
   try {
-    const { name, email, mobile, password, companyName, accessibleProducts, noOfEmployees, location } = req.body;
+    const { name, email, mobile, password, companyName, noOfEmployees, location, accessibleProducts, transactionId } = req.body;
 
-    // Convert comma-separated string to array
-    const productsArray = Array.isArray(accessibleProducts)
-      ? accessibleProducts
-      : accessibleProducts?.split(',').map(item => item.trim()) || [];
+    // Parse accessibleProducts if it's a string
+    let productsArray = [];
+    if (accessibleProducts) {
+      try {
+        productsArray = typeof accessibleProducts === 'string' 
+          ? JSON.parse(accessibleProducts)
+          : accessibleProducts;
+      } catch (e) {
+        console.error('Error parsing accessibleProducts:', e);
+        productsArray = [];
+      }
+    }
 
-    // Set uploads path to /uploads/clients
+    // Fetch full product details from database
+    const fullProducts = await Product.find({
+      name: { $in: productsArray }
+    });
+
+    // Prepare accessible products with full details
+    const accessibleProductsWithDetails = fullProducts.map(product => ({
+      productId: product._id,
+      name: product.name,
+      price: product.price,
+      code: product.code,
+      category: product.category,
+      isPaid: product.price > 0,
+      paymentStatus: 'pending'
+    }));
+
+    // Calculate total amount
+    const totalAmount = accessibleProductsWithDetails.reduce((sum, p) => sum + p.price, 0);
+
+    // Set uploads path
     const aadhaarCardUrl = req.files?.aadhaarCard
       ? `/uploads/clients/${req.files.aadhaarCard[0].filename}`
       : undefined;
@@ -36,30 +71,177 @@ export const addClient = async (req, res) => {
       : undefined;
 
     // Generate custom client ID
-    const customClientId = `CLIENT-${crypto.randomBytes(3).toString('hex').toUpperCase()}`; // e.g., CLIENT-A1B2C3
+    const customClientId = `CLIENT-${crypto.randomBytes(3).toString('hex').toUpperCase()}`;
 
-    const newClient = new Client({
-      clientId: customClientId, // ✅ add field
-      name,
-      email,
-      mobile,
-      password,
-      companyName,
-      accessibleProducts: productsArray,
-      employeesCount: noOfEmployees, 
-      aadhaarCardUrl,
-      panCardUrl,
-      location
-    });
+    // If total amount is 0, create client directly
+    if (totalAmount === 0) {
+      const newClient = new Client({
+        clientId: customClientId,
+        name,
+        email,
+        mobile,
+        password,
+        companyName,
+        employeesCount: noOfEmployees,
+        aadhaarCardUrl,
+        panCardUrl,
+        location,
+        accessibleProducts: accessibleProductsWithDetails.map(p => ({ ...p, paymentStatus: 'captured' })),
+        status: 'pending',
+        totalPaidAmount: 0
+      });
 
-    await newClient.save();
-    res.status(201).json({ message: 'Client added successfully', client: newClient });
+      await newClient.save();
+      
+      return res.status(201).json({ 
+        success: true,
+        message: 'Registration successful! Your account is pending admin approval.', 
+        client: newClient,
+        requiresPayment: false
+      });
+    }
+
+    // If there are paid products and transactionId is provided, verify and capture payment
+    if (transactionId && totalAmount > 0) {
+      try {
+        // Fetch payment details from Razorpay
+        let paymentInfo = await razorpay.payments.fetch(transactionId);
+        
+        if (!paymentInfo) {
+          return res.status(404).json({ 
+            success: false, 
+            message: "Payment not found" 
+          });
+        }
+
+        // Capture payment if not already captured
+        let paymentStatus = paymentInfo.status;
+        if (paymentInfo.status === "authorized" || paymentInfo.status === "created") {
+          try {
+            await razorpay.payments.capture(transactionId, Math.round(totalAmount * 100), "INR");
+            paymentInfo = await razorpay.payments.fetch(transactionId);
+            paymentStatus = paymentInfo.status;
+          } catch (err) {
+            console.error("Payment capture failed:", err);
+            return res.status(500).json({ 
+              success: false, 
+              message: "Payment capture failed" 
+            });
+          }
+        }
+
+        // Check if payment is captured
+        if (paymentStatus !== "captured") {
+          return res.status(400).json({
+            success: false,
+            message: `Payment not captured. Status: ${paymentStatus}`,
+          });
+        }
+
+        // Create client with captured payment
+        const newClient = new Client({
+          clientId: customClientId,
+          name,
+          email,
+          mobile,
+          password,
+          companyName,
+          employeesCount: noOfEmployees,
+          aadhaarCardUrl,
+          panCardUrl,
+          location,
+          accessibleProducts: accessibleProductsWithDetails.map(p => ({ 
+            ...p, 
+            paymentStatus: 'captured',
+            transactionId: transactionId,
+            purchaseDate: new Date()
+          })),
+          paymentDetails: {
+            razorpayPaymentId: transactionId,
+            amount: totalAmount,
+            currency: "INR",
+            status: "captured",
+            capturedAt: new Date()
+          },
+          totalPaidAmount: totalAmount,
+          status: 'pending' // Still pending admin approval
+        });
+
+        await newClient.save();
+
+        return res.status(201).json({ 
+          success: true,
+          message: 'Registration successful! Payment captured. Your account is pending admin approval.', 
+          client: newClient,
+          requiresPayment: false,
+          paymentCaptured: true
+        });
+
+      } catch (error) {
+        console.error("Payment verification error:", error);
+        return res.status(500).json({ 
+          success: false, 
+          message: "Payment verification failed",
+          error: error.message 
+        });
+      }
+    }
+
+    // If there are paid products but no transactionId, create order and return payment info
+    if (totalAmount > 0 && !transactionId) {
+      const newClient = new Client({
+        clientId: customClientId,
+        name,
+        email,
+        mobile,
+        password,
+        companyName,
+        employeesCount: noOfEmployees,
+        aadhaarCardUrl,
+        panCardUrl,
+        location,
+        accessibleProducts: accessibleProductsWithDetails,
+        status: 'pending',
+        totalPaidAmount: totalAmount
+      });
+
+      await newClient.save();
+
+      // Create Razorpay order
+      const razorpayOrder = await razorpay.orders.create({
+        amount: Math.round(totalAmount * 100),
+        currency: 'INR',
+        receipt: `receipt_${newClient._id}`,
+        notes: {
+          clientId: newClient._id.toString(),
+          clientEmail: email,
+          products: productsArray.join(', ')
+        }
+      });
+
+      return res.status(201).json({ 
+        success: true,
+        message: 'Please complete payment to activate your account',
+        client: newClient,
+        requiresPayment: true,
+        razorpayOrder: {
+          id: razorpayOrder.id,
+          amount: razorpayOrder.amount,
+          currency: razorpayOrder.currency
+        },
+        totalAmount
+      });
+    }
+
   } catch (error) {
     console.error('Error adding client:', error);
-    res.status(500).json({ message: 'Server error', error: error.message });
+    res.status(500).json({ 
+      success: false,
+      message: 'Server error', 
+      error: error.message 
+    });
   }
 };
-
 
 // Get all clients
 export const getAllClients = async (req, res) => {
@@ -330,4 +512,38 @@ export const deleteProduct = async (req, res) => {
   }
 };
 
+
+
+// Alternative: Simple version with just status change confirmation
+export const updateClientStatusSimple = async (req, res) => {
+  try {
+    const { clientId } = req.params;
+    const { status } = req.body;
+
+    // Validate status
+    if (!status) {
+      return res.status(400).json({ message: 'Status is required' });
+    }
+
+    // Update status
+    const updatedClient = await Client.findByIdAndUpdate(
+      clientId,
+      { $set: { status } },
+      { new: true }
+    ).select('name email status'); // Only return these fields
+
+    if (!updatedClient) {
+      return res.status(404).json({ message: 'Client not found' });
+    }
+
+    res.status(200).json({
+      success: true,
+      message: 'Status updated successfully',
+      data: updatedClient
+    });
+  } catch (error) {
+    console.error('Error:', error);
+    res.status(500).json({ message: 'Server error' });
+  }
+};
 

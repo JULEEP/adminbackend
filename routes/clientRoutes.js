@@ -9,6 +9,7 @@ import {
   createProduct,
   updateProduct,
   deleteProduct,
+  updateClientStatusSimple,
 } from '../controllers/clientController.js';
 
 import { uploadClientDoc } from '../config/uploadClientDoc.js'
@@ -40,6 +41,9 @@ router.put(
 
 // Delete client
 router.delete('/deleteclient/:clientId', deleteClient);
+
+router.put('/updateclientsstatus/:clientId',  updateClientStatusSimple);
+
 
 router.post('/clientlogin', clientLogin);
 
