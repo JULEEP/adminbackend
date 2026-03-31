@@ -4,6 +4,11 @@ import crypto from 'crypto';
 import jwt from 'jsonwebtoken';
 import Product from "../models/Product.js";
 import Razorpay from 'razorpay';
+import nodemailer from 'nodemailer';
+import dotenv from 'dotenv';
+
+dotenv.config();
+
 
 
 // Generate JWT
@@ -513,36 +518,96 @@ export const deleteProduct = async (req, res) => {
 };
 
 
-
-// Alternative: Simple version with just status change confirmation
 export const updateClientStatusSimple = async (req, res) => {
   try {
     const { clientId } = req.params;
     const { status } = req.body;
 
-    // Validate status
     if (!status) {
       return res.status(400).json({ message: 'Status is required' });
     }
 
-    // Update status
     const updatedClient = await Client.findByIdAndUpdate(
       clientId,
       { $set: { status } },
       { new: true }
-    ).select('name email status'); // Only return these fields
+    );
 
     if (!updatedClient) {
       return res.status(404).json({ message: 'Client not found' });
     }
 
+    // 📦 Products HTML
+    const productsHtml = updatedClient.accessibleProducts.map((p, index) => {
+      return `
+        <tr>
+          <td>${index + 1}</td>
+          <td>${p.name}</td>
+          <td>${p.category}</td>
+          <td>${p.price}</td>
+          <td>${p.paymentStatus}</td>
+        </tr>
+      `;
+    }).join('');
+
+    // 📧 Transporter
+    const transporter = nodemailer.createTransport({
+      service: 'gmail',
+      auth: {
+        user: process.env.EMAIL_USER,
+        pass: process.env.EMAIL_PASS
+      }
+    });
+
+    // ✉️ Email HTML
+    const mailOptions = {
+      from: process.env.EMAIL_USER,
+      to: updatedClient.email,
+      subject: '🎉 Your Account Has Been Verified - Timely Health Care',
+      html: `
+        <div style="font-family: Arial; line-height: 1.6;">
+          <h2>Dear ${updatedClient.name},</h2>
+
+          <p>✅ <b>Your account has been successfully verified.</b></p>
+          <p>You can now login and start using our services.</p>
+
+          <h3>🔐 Login Credentials:</h3>
+          <p><b>Client ID:</b> ${updatedClient.clientId}</p>
+          <p><b>Email:</b> ${updatedClient.email}</p>
+          <p><b>Password:</b> ${updatedClient.password}</p>
+
+          <h3>📦 Purchased Products:</h3>
+          <table border="1" cellpadding="8" cellspacing="0">
+            <tr>
+              <th>#</th>
+              <th>Product Name</th>
+              <th>Category</th>
+              <th>Price</th>
+              <th>Status</th>
+            </tr>
+            ${productsHtml}
+          </table>
+
+          <br/>
+
+          <p>If you have any questions, feel free to contact us.</p>
+
+          <p>Best Regards,</p>
+          <h4>Timely Health Care Team</h4>
+        </div>
+      `
+    };
+
+    await transporter.sendMail(mailOptions);
+
     res.status(200).json({
       success: true,
-      message: 'Status updated successfully',
+      message: 'Status updated & email sent successfully',
       data: updatedClient
     });
+
   } catch (error) {
-    console.error('Error:', error);
+    console.error(error);
     res.status(500).json({ message: 'Server error' });
   }
 };
