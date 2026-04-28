@@ -8,6 +8,7 @@ import connectDB from './config/db.js';
 import userRoutes from './routes/userRoutes.js';
 import clientRoutes from './routes/clientRoutes.js';
 import couponRoutes from './routes/couponRoutes.js';
+import demoRoutes from './routes/demoRoutes.js'; // Import demo routes
 
 
 // 🔥 DNS FIX - Sabse pehle yeh line
@@ -19,7 +20,7 @@ dotenv.config();
 connectDB();
 
 const app = express();
-const PORT = process.env.PORT || 5000;
+const PORT = process.env.PORT || 5005;
 
 // For __dirname in ES Modules
 const __filename = fileURLToPath(import.meta.url);
@@ -36,6 +37,7 @@ app.use('/uploads', express.static(path.join(__dirname, 'uploads')));
 app.use('/api/users', userRoutes);
 app.use('/api/clients', clientRoutes);
 app.use('/api/coupons', couponRoutes);
+app.use('/api/demos', demoRoutes); // ✅ ADD THIS
 
 
 // Root route
